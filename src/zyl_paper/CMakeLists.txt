@@ -1,0 +1,24 @@
+cmake_minimum_required(VERSION 3.0.2)
+project(zyl_paper)
+
+find_package(catkin REQUIRED COMPONENTS
+  geometry_msgs
+  nav_msgs
+  roscpp
+  std_msgs
+)
+
+catkin_package(
+#  INCLUDE_DIRS include
+#  LIBRARIES zyl_control
+#  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp
+#  DEPENDS system_lib
+)
+
+include_directories(
+# include
+  ${catkin_INCLUDE_DIRS}
+)
+
+add_executable(leader_tra_tracking src/leader_tra_tracking.cc)
+target_link_libraries(leader_tra_tracking ${catkin_LIBRARIES})
