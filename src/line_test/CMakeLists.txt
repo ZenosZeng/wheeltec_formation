@@ -21,6 +21,8 @@ include_directories(
 
 add_executable(line_follow src/line_follow.cc)
 add_executable(line_move src/line_move.cc)
+add_executable(line_move_2d src/line_move_2d.cc)
 
 target_link_libraries(line_follow ${catkin_LIBRARIES})
 target_link_libraries(line_move ${catkin_LIBRARIES})
+target_link_libraries(line_move_2d ${catkin_LIBRARIES})
