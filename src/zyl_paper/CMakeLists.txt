@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(line_test)
+project(zyl_paper)
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   nav_msgs
   roscpp
+  std_msgs
 )
 
 catkin_package(
@@ -19,8 +20,5 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-add_executable(line_follow src/line_follow.cc)
-add_executable(line_move src/line_move.cc)
-
-target_link_libraries(line_follow ${catkin_LIBRARIES})
-target_link_libraries(line_move ${catkin_LIBRARIES})
+add_executable(coleader_controller src/coleader_controller.cc)
+target_link_libraries(coleader_controller ${catkin_LIBRARIES})
