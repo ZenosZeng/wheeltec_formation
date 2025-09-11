@@ -10,11 +10,12 @@ public:
     {
         odom_sub_ = nh_.subscribe("/robot_1/odom", 10, &LeaderControlNode::odomCallback, this);
         cmd_pub_  = nh_.advertise<geometry_msgs::Twist>("/robot_1/cmd_vel", 10);
+        // cmd_pub2_ = nh_.advertise<geometry_msgs::Twist>("/robot_2/cmd_vel", 10);
 
         // 参数可调
         vx_ = 0.2;    // x方向恒定速度 (m/s)
-        vy_ = 0.08;    // y方向振幅 (m/s)
-        a_  = 0.8;    // 振荡频率 (rad/s)
+        vy_ = 0.1;    // y方向振幅 (m/s)
+        a_  = 1.0;    // 振荡频率 (rad/s)
         wheelbase_ = 0.3; // 等效轮距，用于侧向速度转角速度
 
         start_time_ = ros::Time::now();
@@ -25,6 +26,7 @@ private:
     ros::NodeHandle nh_;
     ros::Subscriber odom_sub_;
     ros::Publisher cmd_pub_;
+    ros::Publisher cmd_pub2_;
 
     // 控制参数
     double vx_, vy_, a_;
@@ -68,6 +70,7 @@ private:
             cmd.angular.z = 0.0;
             cmd_pub_.publish(cmd);
             ROS_INFO_ONCE("Pe: x=%.3f >= 4.0m, stopping.", x_);
+            ROS_INFO_ONCE("Current Pos: x=%.2f, y=%.2f, theta=%.2f", x_, y_, theta_);
             return;
         }
 
@@ -102,12 +105,16 @@ private:
             ROS_INFO_THROTTLE(0.5, "P1: t=%.2f, global(vx=%.2f, vy=%.2f), "
                     "body(vx=%.2f, vy=%.2f), omega=%.2f, x=%.2f",
                     t, vx, vy, v_body_x, v_body_y, omega, x_);
+            ROS_INFO_THROTTLE(0.5, "Current Pos: x=%.2f, y=%.2f, theta=%.2f", x_, y_, theta_);
         }
 
         // 填充指令
         cmd.linear.x  = v_body_x;
         cmd.angular.z = omega;
+
+        // 发布指令
         cmd_pub_.publish(cmd);
+        // cmd_pub2_.publish(cmd);
     }
 };
 

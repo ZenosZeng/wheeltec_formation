@@ -11,14 +11,14 @@ public:
         odom_sub_ = nh_.subscribe("/robot_1/odom", 10, &LineMoveController::odomCallback, this);
         cmd_pub_ = nh_.advertise<geometry_msgs::Twist>("/robot_1/cmd_vel", 10);
 
-        kp_linear_ = 0.5;   // 线速度比例
+        kp_linear_ = 1.0;   // 线速度比例
         kp_angular_ = 1.0;  // 角速度比例
 
         target_x_ = 3.5;
-        target_y_ = -0.5;
+        target_y_ = -1;
 
-        max_speed_ = 0.3;
-        max_angular_ = 0.5; // rad/s
+        max_speed_ = 0.4;
+        max_angular_ = 1; // rad/s
 
         start_received_ = false;
     }

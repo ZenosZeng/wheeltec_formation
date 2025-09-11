@@ -20,5 +20,5 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-add_executable(leader_tra_tracking src/leader_tra_tracking.cc)
-target_link_libraries(leader_tra_tracking ${catkin_LIBRARIES})
+add_executable(leader_controller src/leader_controller.cc)
+target_link_libraries(leader_controller ${catkin_LIBRARIES})

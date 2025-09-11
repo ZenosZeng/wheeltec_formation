@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(line_test)
+project(tester)
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
@@ -22,7 +22,12 @@ include_directories(
 add_executable(line_follow src/line_follow.cc)
 add_executable(line_move src/line_move.cc)
 add_executable(line_move_2d src/line_move_2d.cc)
-
 target_link_libraries(line_follow ${catkin_LIBRARIES})
 target_link_libraries(line_move ${catkin_LIBRARIES})
 target_link_libraries(line_move_2d ${catkin_LIBRARIES})
+
+add_executable(line_test_4robot src/line_test_4robot.cc)
+target_link_libraries(line_test_4robot ${catkin_LIBRARIES})
+
+add_executable(talker_node src/talker_node.cc)
+target_link_libraries(talker_node ${catkin_LIBRARIES})
