@@ -10,7 +10,6 @@ public:
     {
         odom_sub_ = nh_.subscribe("/robot_1/odom", 10, &LeaderControlNode::odomCallback, this);
         cmd_pub_  = nh_.advertise<geometry_msgs::Twist>("/robot_1/cmd_vel", 10);
-        // cmd_pub2_ = nh_.advertise<geometry_msgs::Twist>("/robot_2/cmd_vel", 10);
 
         // 参数可调
         vx_ = 0.2;    // x方向恒定速度 (m/s)
@@ -114,7 +113,6 @@ private:
 
         // 发布指令
         cmd_pub_.publish(cmd);
-        // cmd_pub2_.publish(cmd);
     }
 };
 

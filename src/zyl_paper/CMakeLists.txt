@@ -22,3 +22,9 @@ include_directories(
 
 add_executable(leader_controller src/leader_controller.cc)
 target_link_libraries(leader_controller ${catkin_LIBRARIES})
+
+add_executable(rp_controller src/rp_controller.cc)
+target_link_libraries(rp_controller ${catkin_LIBRARIES})
+
+add_executable(rigid_controller src/rigid_controller.cc)
+target_link_libraries(rigid_controller ${catkin_LIBRARIES})
