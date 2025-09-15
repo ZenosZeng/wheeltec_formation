@@ -7,6 +7,7 @@
 #include <cmath>
 #include <functional>
 #include <boost/bind/bind.hpp>
+#include <Eigen/Dense>
 
 struct Robot {
     // ros::Subscriber odom_sub;
@@ -22,7 +23,7 @@ struct Robot {
 
     // 控制参数
     double max_v = 0.5;  
-    double max_w = 0.8;     
+    double max_w = 0.6;     
 };
 
 class FormationNode {
@@ -64,7 +65,9 @@ private:
 
     // 控制参数
     float akm_offset = 0.2 ;
-    double k_p_ = 0.7;  // P控制增益 全局
+    double k_p_ = 0.5;  // P控制增益 全局
+    double alpha_ = 0.6;  // 定向增益
+    double beta_ = 0.0;   // SMC
 
     // leader 运动参数 vy=-Asin(wt)
     double A_ = 0.1;     // 振幅
@@ -76,8 +79,8 @@ private:
     double v_straight_ = 0.2; // vx
 
     // 定向向量
-    std::vector<double> p_o_;
-    std::vector<double> dp_o_;
+    Eigen::Vector2d p_o_;
+    Eigen::Vector2d dp_o_;
 
     // 队形
     double d_01_ = 0.6;
@@ -128,16 +131,16 @@ private:
             return;
         }
 
-        if(t < leader_start_time_)
-        {
-            k_p_ = 0.5; 
-        } else {
-            k_p_ = 1.5; 
-        }
+        // if(t < leader_start_time_)
+        // {
+        //     k_p_ = 0.5; 
+        // } else {
+        //     k_p_ = 1.0; 
+        // }
 
-        std::vector<double> u_leader = getLeaderCmd(t); // vx vy
-        std::vector<double> u_coleader = getColeaderCmd();
-        std::vector<double> u_follower = getFollowerCmd();
+        Eigen::Vector2d u_leader = getLeaderCmd(t); // vx vy
+        Eigen::Vector2d u_coleader = getColeaderCmd(u_leader);
+        Eigen::Vector2d u_follower = getFollowerCmd();
 
         // 转换成v omega并发布
         publishCmd(0, u_leader);
@@ -147,8 +150,8 @@ private:
 
     // ======= Leader速度计算 =======
     // 该函数返回leader的期望速度vd，以及更新po dpo
-    std::vector<double> getLeaderCmd(double t) {
-        std::vector<double> vd;
+    Eigen::Vector2d getLeaderCmd(double t) {
+        Eigen::Vector2d vd;
         // leader delay 10s
         if (t < leader_start_time_) {
             p_o_ = {d_01_, 0.0};
@@ -160,9 +163,11 @@ private:
             dp_o_ = {0.0, 0.0};
         } else { 
             vd = {v_straight_, -A_*sin(w_*(t-12.0))}; // pi=3.14
+
             // 此时po时变
             double theta = std::atan2(vd[1], vd[0]);
-            double dtheta = (1.0 / std::pow(std::cos(w_ * t), 2)) * w_;
+            double dtheta = (1.0 / std::pow(std::cos(w_ * (t-12.0)), 2)) * w_;
+
             p_o_ = {d_01_ * cos(theta), d_01_ * sin(theta)};
             dp_o_ = {-d_01_ * sin(theta) * dtheta, d_01_ * cos(theta) * dtheta};
         }
@@ -176,55 +181,67 @@ private:
     }
 
     // ======= Coleader速度计算 =======
-    std::vector<double> getColeaderCmd(double desired_distance = 0.6) {
-        std::vector<double> u = {0.0, 0.0};
-        // 获取leader和coleader状态
-        double lx = robots_[0].x;
-        double ly = robots_[0].y;
-        double lyaw = robots_[0].yaw;
+    Eigen::Vector2d getColeaderCmd(Eigen::Vector2d vd) {
+        Eigen::Vector2d u = {0.0, 0.0};
 
-        double cx = robots_[1].x;
-        double cy = robots_[1].y;
-        double cyaw = robots_[1].yaw;
-        // friday 9.12 here
-        
+        // 定向变量
+        Eigen::Vector2d p_01 = {robots_[0].x - robots_[1].x, robots_[0].y - robots_[1].y};
+        Eigen::Vector2d p_o_bar = p_01 - p_o_ ;
+
+        // 刚性变量
+        Eigen::Vector2d p_10 = -p_01;
+        Eigen::Vector2d p_12 = {robots_[1].x - robots_[2].x, robots_[1].y - robots_[2].y};
+        double d_12 = p_12.norm();
+        double d_10 = p_10.norm();
+        double sigma_10 = d_10 * d_10 - d_01_ * d_01_;
+        double sigma_12 = d_12 * d_12 - d_12_ * d_12_;
+        Eigen::Vector2d r10 = sigma_10 * p_10;
+        Eigen::Vector2d r12 = sigma_12 * p_12;
+        Eigen::Vector2d r1 = r10 + r12;
+
+        // control law
+        double eta = alpha_ * (p_o_bar.dot(dp_o_)) /
+                     std::pow((r1 - alpha_ * p_o_bar).norm(), 2);
+
+        u = -(k_p_ - eta) * (r1 - alpha_ * p_o_bar) + vd;
+
+        return u; // 全局系下的速度
+    }
+
+    Eigen::Vector2d sign(const Eigen::Vector2d& v) {
+        Eigen::Vector2d res;
+        for (int i = 0; i < 2; ++i) {
+            if (v[i] > 0) res[i] = 1.0;
+            else if (v[i] < 0) res[i] = -1.0;
+            else res[i] = 0.0;
+        }
+        return res;
     }
 
     // ======= Follower速度计算 =======
-    std::vector<double> getFollowerCmd(double desired_back = 0.3, double desired_left = 0.6) {
-        // leader状态
-        double lx = robots_[0].x;
-        double ly = robots_[0].y;
-        double lyaw = robots_[0].yaw;
+    Eigen::Vector2d getFollowerCmd() {
+        Eigen::Vector2d u = {0.0, 0.0};
 
-        // follower状态
-        double fx = robots_[2].x;
-        double fy = robots_[2].y;
-        double fyaw = robots_[2].yaw;
+        // 刚性变量
+        Eigen::Vector2d p_20 = {robots_[2].x - robots_[0].x, robots_[2].y - robots_[0].y};
+        Eigen::Vector2d p_21 = {robots_[2].x - robots_[1].x, robots_[2].y - robots_[1].y};
+        double d_21 = p_21.norm();
+        double d_20 = p_20.norm();
+        double sigma_20 = d_20 * d_20 - d_02_ * d_02_;
+        double sigma_21 = d_21 * d_21 - d_12_ * d_12_;
+        Eigen::Vector2d r20 = sigma_20 * p_20;
+        Eigen::Vector2d r21 = sigma_21 * p_21;
+        Eigen::Vector2d r2 = r20 + r21;
 
-        // ---- 计算 target point （全局系下的期望位置）----
-        // 在 leader 坐标系下: (-desired_back, +desired_left)
-        double tx_local = -desired_back;
-        double ty_local = +desired_left;
+        // control law
+        u = -k_p_ * r2 - beta_ * sign(r2);
 
-        // 转换到全局系
-        double target_x = lx + cos(lyaw) * tx_local - sin(lyaw) * ty_local;
-        double target_y = ly + sin(lyaw) * tx_local + cos(lyaw) * ty_local;
-
-        // ---- 计算误差 (ex, ey) ----
-        double ex = target_x - fx;
-        double ey = target_y - fy;
-
-        // ---- P 控制 (全局系速度) ----
-        double vx_global = k_p_ * ex;
-        double vy_global = k_p_ * ey;
-
-        return {vx_global, vy_global}; // 全局系速度
+        return u; // 全局系下的速度
     }
 
 
     // ======= 发布函数 =======
-    void publishCmd(int index, const std::vector<double>& v) {
+    void publishCmd(int index, const Eigen::Vector2d& v) {
         geometry_msgs::Twist twist;
         
         // 转换到个体坐标系
