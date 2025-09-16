@@ -26,19 +26,19 @@ struct Robot {
     double max_w = 0.6;     
 };
 
-class FormationNode {
+class RigidControllerNode {
 public:
-    FormationNode(ros::NodeHandle& nh) : nh_(nh) {
+    RigidControllerNode(ros::NodeHandle& nh) : nh_(nh) {
         // leader
         robots_.push_back(Robot());
         robots_[0].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_1/robot_pose_ekf/odom_combined", 10,
-            boost::bind(&FormationNode::poseCallback, this, _1, 0));
+            boost::bind(&RigidControllerNode::poseCallback, this, _1, 0));
         robots_[0].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_1/cmd_vel", 10);
 
         // coleader
         robots_.push_back(Robot());
         robots_[1].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_2/robot_pose_ekf/odom_combined", 10,
-            boost::bind(&FormationNode::poseCallback, this, _1, 1));
+            boost::bind(&RigidControllerNode::poseCallback, this, _1, 1));
         robots_[1].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_2/cmd_vel", 10);
         robots_[1].init_x = -1.0;
         robots_[1].init_y = 0.0;
@@ -47,14 +47,14 @@ public:
         // follower
         robots_.push_back(Robot());
         robots_[2].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_3/robot_pose_ekf/odom_combined", 10,
-            boost::bind(&FormationNode::poseCallback, this, _1, 2));
+            boost::bind(&RigidControllerNode::poseCallback, this, _1, 2));
         robots_[2].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_3/cmd_vel", 10);
         robots_[2].init_x = -1.0;
         robots_[2].init_y = 1.0;
         robots_[2].init_yaw = 0.0;
 
         // 定时器：统一 control loop
-        timer_ = nh_.createTimer(ros::Duration(0.02), &FormationNode::controlLoop, this);
+        timer_ = nh_.createTimer(ros::Duration(0.02), &RigidControllerNode::controlLoop, this);
     }
 
 private:
@@ -65,27 +65,31 @@ private:
 
     // 控制参数
     float akm_offset = 0.2 ;
-    double k_p_ = 0.5;  // P控制增益 全局
-    double alpha_ = 0.6;  // 定向增益
+
+    // coleader参数
+    double k_coleader_ = 0.5;
+    double alpha_ = 0.7;  // 定向增益
+
+    // follower参数
+    double k_follower_ = 3.0;
     double beta_ = 0.0;   // SMC
 
     // leader 运动参数 vy=-Asin(wt)
-    double A_ = 0.1;     // 振幅
+    double A_ = 0.06;     // 振幅
     double w_ = 0.5;     // omega
-    
+    double v_straight_ = 0.2; // vx
     double init_time_ = 5.0;
     double leader_start_time_ = 10.0;
     double go_straight_time_ = 2.0;
-    double v_straight_ = 0.2; // vx
 
     // 定向向量
     Eigen::Vector2d p_o_;
     Eigen::Vector2d dp_o_;
 
     // 队形
-    double d_01_ = 0.6;
-    double d_02_ = 0.6;
-    double d_12_ = 0.6;
+    double d_01_ = 0.7;
+    double d_02_ = 0.7;
+    double d_12_ = 0.7;
 
     // ====== 回调函数 ======
     void poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg, int index) {
@@ -103,14 +107,17 @@ private:
     // ====== 控制循环 ======
     void controlLoop(const ros::TimerEvent&){
         // 确保所有pose sub已准备好
-        if (!robots_[0].pose_ekf_ready || !robots_[1].pose_ekf_ready || !robots_[2].pose_ekf_ready) return;
+        if (!robots_[0].pose_ekf_ready || !robots_[1].pose_ekf_ready || !robots_[2].pose_ekf_ready){
+            ROS_INFO_THROTTLE(1, "Waiting for all robots' pose_ekf...");
+        }
 
         // 获取仿真时间
         ros::Time t_now = ros::Time::now();
         static ros::Time t_start = t_now;
         double t = (t_now - t_start).toSec();
+        ROS_INFO_ONCE("Formation control started. t=%.2f", t);
 
-        // 0.5Hz log 每个车的位置
+        // log 每个车的位置
         ROS_INFO_THROTTLE(1, "T:%.2f | L: (%.2f, %.2f, %.2f) | C: (%.2f, %.2f, %.2f) | F: (%.2f, %.2f, %.2f)", 
             t,
             robots_[0].x, robots_[0].y, robots_[0].yaw,
@@ -140,7 +147,7 @@ private:
 
         Eigen::Vector2d u_leader = getLeaderCmd(t); // vx vy
         Eigen::Vector2d u_coleader = getColeaderCmd(u_leader);
-        Eigen::Vector2d u_follower = getFollowerCmd();
+        Eigen::Vector2d u_follower = getFollowerCmd(t);
 
         // 转换成v omega并发布
         publishCmd(0, u_leader);
@@ -162,18 +169,23 @@ private:
             p_o_ = {d_01_, 0.0};
             dp_o_ = {0.0, 0.0};
         } else { 
-            vd = {v_straight_, -A_*sin(w_*(t-12.0))}; // pi=3.14
+            double sin_start_time = leader_start_time_ + go_straight_time_;
+            double vx = v_straight_;
+            double vy = -A_ * sin(w_ * (t - sin_start_time));
+            double dvx = 0.0;
+            double dvy = -A_ * w_ * cos(w_ * (t - sin_start_time));
 
-            // 此时po时变
+            vd = {vx, vy}; 
+
             double theta = std::atan2(vd[1], vd[0]);
-            double dtheta = (1.0 / std::pow(std::cos(w_ * (t-12.0)), 2)) * w_;
+            double dtheta = (vx * dvy - vy * dvx) / (vx*vx + vy*vy);
 
             p_o_ = {d_01_ * cos(theta), d_01_ * sin(theta)};
             dp_o_ = {-d_01_ * sin(theta) * dtheta, d_01_ * cos(theta) * dtheta};
         }
 
         // stop signal
-        if ( robots_[0].x > 3.8 ) {
+        if ( robots_[0].x > 4.0 ) {
             vd = {0.0, 0.0};
         } // stop
 
@@ -197,13 +209,13 @@ private:
         double sigma_12 = d_12 * d_12 - d_12_ * d_12_;
         Eigen::Vector2d r10 = sigma_10 * p_10;
         Eigen::Vector2d r12 = sigma_12 * p_12;
-        Eigen::Vector2d r1 = r10 + r12;
+        Eigen::Vector2d r1 = r10 ; // + r12
 
         // control law
         double eta = alpha_ * (p_o_bar.dot(dp_o_)) /
                      std::pow((r1 - alpha_ * p_o_bar).norm(), 2);
 
-        u = -(k_p_ - eta) * (r1 - alpha_ * p_o_bar) + vd;
+        u = -(k_coleader_ - eta) * (r1 - alpha_ * p_o_bar) + vd;
 
         return u; // 全局系下的速度
     }
@@ -219,8 +231,9 @@ private:
     }
 
     // ======= Follower速度计算 =======
-    Eigen::Vector2d getFollowerCmd() {
+    Eigen::Vector2d getFollowerCmd(double t) {
         Eigen::Vector2d u = {0.0, 0.0};
+        // return u;
 
         // 刚性变量
         Eigen::Vector2d p_20 = {robots_[2].x - robots_[0].x, robots_[2].y - robots_[0].y};
@@ -234,7 +247,11 @@ private:
         Eigen::Vector2d r2 = r20 + r21;
 
         // control law
-        u = -k_p_ * r2 - beta_ * sign(r2);
+        double k_f = k_follower_;
+        if(t < leader_start_time_) {
+            k_f = 0.3;
+        }
+        u = -k_f * r2 - beta_ * sign(r2);
 
         return u; // 全局系下的速度
     }
@@ -251,7 +268,9 @@ private:
 
         // 限幅
         if (vx_local > robots_[index].max_v) vx_local = robots_[index].max_v;
-        if (vx_local < -robots_[index].max_v) vx_local = -robots_[index].max_v;
+        // if (vx_local < -robots_[index].max_v) vx_local = -robots_[index].max_v;
+        if (vx_local < 0.0) vx_local = 0.0; // no reverse
+
         if (omega > robots_[index].max_w) omega = robots_[index].max_w;
         if (omega < -robots_[index].max_w) omega = -robots_[index].max_w;
 
@@ -264,9 +283,9 @@ private:
 };
  
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "formation_node");
+    ros::init(argc, argv, "rigid_controller_node");
     ros::NodeHandle nh;
-    FormationNode node(nh);
+    RigidControllerNode node(nh);
     ros::spin();
     return 0;
 }

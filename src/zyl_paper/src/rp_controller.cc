@@ -22,22 +22,22 @@ struct Robot {
 
     // 控制参数
     double max_v = 0.5;  
-    double max_w = 0.8;     
+    double max_w = 1.8;
 };
 
-class FormationNode {
+class RpControllerNode {
 public:
-    FormationNode(ros::NodeHandle& nh) : nh_(nh) {
+    RpControllerNode(ros::NodeHandle& nh) : nh_(nh) {
         // leader
         robots_.push_back(Robot());
         robots_[0].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_1/robot_pose_ekf/odom_combined", 10,
-            boost::bind(&FormationNode::poseCallback, this, _1, 0));
+            boost::bind(&RpControllerNode::poseCallback, this, _1, 0));
         robots_[0].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_1/cmd_vel", 10);
 
         // coleader
         robots_.push_back(Robot());
         robots_[1].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_2/robot_pose_ekf/odom_combined", 10,
-            boost::bind(&FormationNode::poseCallback, this, _1, 1));
+            boost::bind(&RpControllerNode::poseCallback, this, _1, 1));
         robots_[1].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_2/cmd_vel", 10);
         robots_[1].init_x = -1.0;
         robots_[1].init_y = 0.0;
@@ -46,14 +46,14 @@ public:
         // follower
         robots_.push_back(Robot());
         robots_[2].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_3/robot_pose_ekf/odom_combined", 10,
-            boost::bind(&FormationNode::poseCallback, this, _1, 2));
+            boost::bind(&RpControllerNode::poseCallback, this, _1, 2));
         robots_[2].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_3/cmd_vel", 10);
         robots_[2].init_x = -1.0;
         robots_[2].init_y = 1.0;
         robots_[2].init_yaw = 0.0;
 
         // 定时器：统一 control loop
-        timer_ = nh_.createTimer(ros::Duration(0.02), &FormationNode::controlLoop, this);
+        timer_ = nh_.createTimer(ros::Duration(0.02), &RpControllerNode::controlLoop, this);
     }
 
 private:
@@ -63,7 +63,7 @@ private:
     std::vector<Robot> robots_;
 
     float akm_offset = 0.2 ;
-    double k_p_ = 0.7;  // P控制增益 全局
+    double k_p_ = 1.0;  // P控制增益 全局
 
     // ====== 回调函数 ======
     void poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg, int index) {
@@ -113,7 +113,7 @@ private:
         {
             k_p_ = 0.5; 
         } else {
-            k_p_ = 1.5; 
+            k_p_ = 3.0; 
         }
 
         std::vector<double> u_leader = getLeaderCmd(t); // vx vy
@@ -137,7 +137,7 @@ private:
         } 
         
         // sin para
-        double A = 0.1;     // 振幅
+        double A = 0.06;     // 振幅
         double w = 0.5;     // omega
         double v_straight = 0.2; // 前直线速度
 
@@ -151,7 +151,7 @@ private:
         }
 
         // stop signal
-        if ( robots_[0].x > 3.8 ) {
+        if ( robots_[0].x > 4.0 ) {
             vx = 0.0;
             vy = 0.0; 
         } // stop
@@ -160,7 +160,7 @@ private:
     }
 
     // ======= Coleader速度计算 =======
-    std::vector<double> getColeaderCmd(double desired_distance = 0.6) {
+    std::vector<double> getColeaderCmd(double desired_distance = 0.8) {
         // 获取leader和coleader状态
         double lx = robots_[0].x;
         double ly = robots_[0].y;
@@ -178,6 +178,7 @@ private:
         double angle_to_leader = atan2(dy, dx);
         double ex = dx - desired_distance * cos(angle_to_leader);
         double ey = dy - desired_distance * sin(angle_to_leader);
+        ROS_INFO_THROTTLE(1, "err_c: (%.2f, %.2f)", ex, ey);
 
         double vx_global = k_p_ * ex;
         double vy_global = k_p_ * ey;
@@ -186,7 +187,7 @@ private:
     }
 
     // ======= Follower速度计算 =======
-    std::vector<double> getFollowerCmd(double desired_back = 0.3, double desired_left = 0.6) {
+    std::vector<double> getFollowerCmd(double desired_back = 0.4, double desired_left = 0.7) {
         // leader状态
         double lx = robots_[0].x;
         double ly = robots_[0].y;
@@ -209,6 +210,7 @@ private:
         // ---- 计算误差 (ex, ey) ----
         double ex = target_x - fx;
         double ey = target_y - fy;
+        ROS_INFO_THROTTLE(1, "err_f: (%.2f, %.2f)", ex, ey);
 
         // ---- P 控制 (全局系速度) ----
         double vx_global = k_p_ * ex;
@@ -229,7 +231,9 @@ private:
 
         // 限幅
         if (vx_local > robots_[index].max_v) vx_local = robots_[index].max_v;
-        if (vx_local < -robots_[index].max_v) vx_local = -robots_[index].max_v;
+        // if (vx_local < -robots_[index].max_v) vx_local = -robots_[index].max_v;
+        if (vx_local < 0.0) vx_local = 0.0; // 不倒车
+
         if (omega > robots_[index].max_w) omega = robots_[index].max_w;
         if (omega < -robots_[index].max_w) omega = -robots_[index].max_w;
 
@@ -242,9 +246,9 @@ private:
 };
  
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "formation_node");
+    ros::init(argc, argv, "rp_controller_node");
     ros::NodeHandle nh;
-    FormationNode node(nh);
+    RpControllerNode node(nh);
     ros::spin();
     return 0;
 }
