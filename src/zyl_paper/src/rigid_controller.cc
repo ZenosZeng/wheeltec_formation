@@ -8,6 +8,7 @@
 #include <functional>
 #include <boost/bind/bind.hpp>
 #include <Eigen/Dense>
+#include <fstream>
 
 struct Robot {
     // ros::Subscriber odom_sub;
@@ -41,7 +42,7 @@ public:
             boost::bind(&RigidControllerNode::poseCallback, this, _1, 1));
         robots_[1].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_2/cmd_vel", 10);
         robots_[1].init_x = -1.0;
-        robots_[1].init_y = 0.0;
+        robots_[1].init_y = -0.5;
         robots_[1].init_yaw = 0.0;
 
         // follower
@@ -55,11 +56,17 @@ public:
 
         // 定时器：统一 control loop
         timer_ = nh_.createTimer(ros::Duration(0.02), &RigidControllerNode::controlLoop, this);
+
+        // 初始化log header
+        log_str_rows_.push_back("t,d01_err,d02_err,d12_err,o_error,o_error_deg");
     }
 
 private:
     ros::NodeHandle nh_;
     ros::Timer timer_;
+
+    // 用于记录log csv
+    std::vector<std::string> log_str_rows_;
 
     std::vector<Robot> robots_;
 
@@ -67,19 +74,21 @@ private:
     float akm_offset = 0.2 ;
 
     // coleader参数
-    double k_coleader_ = 0.5;
-    double alpha_ = 0.7;  // 定向增益
+    double k_coleader_ = 0.6;
+    double alpha_ = 0.6;  // 定向增益 0.6
 
     // follower参数
     double k_follower_ = 3.0;
-    double beta_ = 0.0;   // SMC
+    // double beta_ = 0.0;   // SMC
+    double beta_soft_ = 0.37; // 0.37
+    double tanh_k_ = 4.0;
 
     // leader 运动参数 vy=-Asin(wt)
     double A_ = 0.06;     // 振幅
     double w_ = 0.5;     // omega
     double v_straight_ = 0.2; // vx
     double init_time_ = 5.0;
-    double leader_start_time_ = 10.0;
+    double leader_start_time_ = 5.0;
     double go_straight_time_ = 2.0;
 
     // 定向向量
@@ -90,6 +99,14 @@ private:
     double d_01_ = 0.7;
     double d_02_ = 0.7;
     double d_12_ = 0.7;
+
+    // 控制输入
+    Eigen::Vector2d u_0_, u_1_, u_2_;
+    double t_global_ = 0.0; // time from node start
+
+    // 停止信号，用于dump和stop
+    bool stop_signal_ = false;
+    bool log_dumped_ = false;
 
     // ====== 回调函数 ======
     void poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg, int index) {
@@ -114,88 +131,145 @@ private:
         // 获取仿真时间
         ros::Time t_now = ros::Time::now();
         static ros::Time t_start = t_now;
-        double t = (t_now - t_start).toSec();
-        ROS_INFO_ONCE("Formation control started. t=%.2f", t);
+        t_global_ = (t_now - t_start).toSec();
+        ROS_INFO_ONCE("Formation control started. t=%.2f", t_global_);
 
         // log 每个车的位置
-        ROS_INFO_THROTTLE(1, "T:%.2f | L: (%.2f, %.2f, %.2f) | C: (%.2f, %.2f, %.2f) | F: (%.2f, %.2f, %.2f)", 
-            t,
-            robots_[0].x, robots_[0].y, robots_[0].yaw,
-            robots_[1].x, robots_[1].y, robots_[1].yaw,
-            robots_[2].x, robots_[2].y, robots_[2].yaw);
+        // ROS_INFO_THROTTLE(1, "T:%.2f | L: (%.2f, %.2f, %.2f) | C: (%.2f, %.2f, %.2f) | F: (%.2f, %.2f, %.2f)", 
+        //     t_global_,
+        //     robots_[0].x, robots_[0].y, robots_[0].yaw,
+        //     robots_[1].x, robots_[1].y, robots_[1].yaw,
+        //     robots_[2].x, robots_[2].y, robots_[2].yaw);
 
         /**
          * 主控制逻辑
-         * 0-5s 静止 输出位置 检查init正确性
-         * 5-10s leader不动 其他先形成队形
-         * 10s leader开始动 集体跟踪 (leader先走2s直线,然后sin)
+         * p0 静止 输出位置 检查init正确性
+         * p1 leader不动 其他先形成队形
+         * p2 leader开始动 集体跟踪 (leader先走2s直线,然后sin)
          */
 
-        if (t < init_time_) {
-            publishCmd(0, {0.0, 0.0});
-            publishCmd(1, {0.0, 0.0});
-            publishCmd(2, {0.0, 0.0});
+        if ( t_global_ < init_time_) {
+            // 小于init时间，静止
+            u_0_ = {0.0, 0.0};
+            u_1_ = {0.0, 0.0};
+            u_2_ = {0.0, 0.0};
+        } else {
+            // 根据控制律计算控制量
+            getLeaderCmd(); // vx vy
+            getColeaderCmd();
+            getFollowerCmd();
+        }
+
+        // 转换成v omega并发布
+        publishCmd(0, u_0_);
+        publishCmd(1, u_1_);
+        publishCmd(2, u_2_);
+
+        // 记录log
+        record_to_log_str();
+    }
+
+    void record_to_log_str(){
+        // distance err
+        double e_01 = std::abs(std::hypot(robots_[0].x - robots_[1].x,
+                                  robots_[0].y - robots_[1].y) - d_01_);
+        double e_02 = std::abs(std::hypot(robots_[0].x - robots_[2].x,
+                                  robots_[0].y - robots_[2].y) - d_02_);
+        double e_12 = std::abs(std::hypot(robots_[1].x - robots_[2].x,
+                                  robots_[1].y - robots_[2].y) - d_12_);
+        
+        // orientation err
+        Eigen::Vector2d p_01 = {robots_[0].x - robots_[1].x,
+                                robots_[0].y - robots_[1].y};
+        double o_err = (p_01-p_o_).norm();
+
+        double angle1 = std::atan2(p_01.y(), p_01.x());
+        double angle2 = std::atan2(p_o_.y(), p_o_.x());
+        double o_err_rad = std::abs(angle1 - angle2);
+        double o_err_deg = o_err_rad * 180.0 / M_PI;
+
+        // add to str
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(2) << t_global_ << ",";
+        oss << std::fixed << std::setprecision(4)
+            << e_01 << ","
+            << e_02 << ","
+            << e_12 << ","
+            << o_err << ",";
+        oss << std::fixed << std::setprecision(2)
+            << o_err_deg;
+
+        log_str_rows_.push_back(oss.str());
+
+        // print in 1Hz
+        ROS_INFO_THROTTLE(1, "T:%.2f | Err | d01: %.3f | d02: %.3f | d12: %.3f | o: %.3f | o_deg: %.2f", 
+            t_global_, e_01, e_02, e_12, o_err, o_err_deg);
+
+        // 检查停止信号
+        if (stop_signal_ && !log_dumped_ ) {
+            dump_log("/home/wheeltec/zyl_ws/fmc.log");
+            log_dumped_ = true;
+        }
+    }
+
+    void dump_log(const std::string& filename){
+        std::ofstream log_file(filename);
+        if (!log_file.is_open()) {
+            ROS_ERROR("Failed to open log file: %s", filename.c_str());
             return;
         }
 
-        // if(t < leader_start_time_)
-        // {
-        //     k_p_ = 0.5; 
-        // } else {
-        //     k_p_ = 1.0; 
-        // }
+        for (const auto& row : log_str_rows_) {
+            log_file << row << "\n";
+        }
 
-        Eigen::Vector2d u_leader = getLeaderCmd(t); // vx vy
-        Eigen::Vector2d u_coleader = getColeaderCmd(u_leader);
-        Eigen::Vector2d u_follower = getFollowerCmd(t);
-
-        // 转换成v omega并发布
-        publishCmd(0, u_leader);
-        publishCmd(1, u_coleader);
-        publishCmd(2, u_follower);
+        log_file.close();
+        ROS_INFO("Log file saved: %s", filename.c_str());
     }
 
     // ======= Leader速度计算 =======
     // 该函数返回leader的期望速度vd，以及更新po dpo
-    Eigen::Vector2d getLeaderCmd(double t) {
-        Eigen::Vector2d vd;
-        // leader delay 10s
-        if (t < leader_start_time_) {
+    void getLeaderCmd() {
+        // stop signal
+        if ( robots_[0].x > 4.0 ) {
+            u_0_ = {0.0, 0.0};
+            dp_o_ = {0.0, 0.0};
+            stop_signal_ = true;
+            return;
+        }
+
+        // x < stop_x 
+        if (t_global_ < leader_start_time_) {
             p_o_ = {d_01_, 0.0};
             dp_o_ = {0.0, 0.0};
-            return {0.0, 0.0};
-        } else if (t < (leader_start_time_ + go_straight_time_) ) { 
-            vd = {v_straight_, 0.0};
+            u_0_ = {0.0, 0.0};
+            return;
+        } else if (t_global_ < (leader_start_time_ + go_straight_time_) ) { 
+            u_0_ = {v_straight_, 0.0};
             p_o_ = {d_01_, 0.0};
             dp_o_ = {0.0, 0.0};
-        } else { 
+            return;
+        } else {
+            // p2: sin运动 
             double sin_start_time = leader_start_time_ + go_straight_time_;
             double vx = v_straight_;
-            double vy = -A_ * sin(w_ * (t - sin_start_time));
+            double vy = -A_ * sin(w_ * (t_global_ - sin_start_time));
             double dvx = 0.0;
-            double dvy = -A_ * w_ * cos(w_ * (t - sin_start_time));
+            double dvy = -A_ * w_ * cos(w_ * (t_global_ - sin_start_time));
 
-            vd = {vx, vy}; 
+            u_0_ = {vx, vy};
 
-            double theta = std::atan2(vd[1], vd[0]);
+            double theta = std::atan2(vy, vx);
             double dtheta = (vx * dvy - vy * dvx) / (vx*vx + vy*vy);
 
             p_o_ = {d_01_ * cos(theta), d_01_ * sin(theta)};
             dp_o_ = {-d_01_ * sin(theta) * dtheta, d_01_ * cos(theta) * dtheta};
+            return;
         }
-
-        // stop signal
-        if ( robots_[0].x > 4.0 ) {
-            vd = {0.0, 0.0};
-        } // stop
-
-        return vd;
     }
 
     // ======= Coleader速度计算 =======
-    Eigen::Vector2d getColeaderCmd(Eigen::Vector2d vd) {
-        Eigen::Vector2d u = {0.0, 0.0};
-
+    void getColeaderCmd() {
         // 定向变量
         Eigen::Vector2d p_01 = {robots_[0].x - robots_[1].x, robots_[0].y - robots_[1].y};
         Eigen::Vector2d p_o_bar = p_01 - p_o_ ;
@@ -215,26 +289,29 @@ private:
         double eta = alpha_ * (p_o_bar.dot(dp_o_)) /
                      std::pow((r1 - alpha_ * p_o_bar).norm(), 2);
 
-        u = -(k_coleader_ - eta) * (r1 - alpha_ * p_o_bar) + vd;
-
-        return u; // 全局系下的速度
+        u_1_ = -(k_coleader_ - eta) * (r1 - alpha_ * p_o_bar) + u_0_;
     }
 
-    Eigen::Vector2d sign(const Eigen::Vector2d& v) {
+    // Eigen::Vector2d sign(const Eigen::Vector2d& v) {
+    //     Eigen::Vector2d res;
+    //     for (int i = 0; i < 2; ++i) {
+    //         if (v[i] > 0) res[i] = 1.0;
+    //         else if (v[i] < 0) res[i] = -1.0;
+    //         else res[i] = 0.0;
+    //     }
+    //     return res;
+    // }
+
+    Eigen::Vector2d tanhVec(const Eigen::Vector2d& v) {
         Eigen::Vector2d res;
         for (int i = 0; i < 2; ++i) {
-            if (v[i] > 0) res[i] = 1.0;
-            else if (v[i] < 0) res[i] = -1.0;
-            else res[i] = 0.0;
+            res[i] = std::tanh(tanh_k_ * v[i]);
         }
         return res;
     }
 
     // ======= Follower速度计算 =======
-    Eigen::Vector2d getFollowerCmd(double t) {
-        Eigen::Vector2d u = {0.0, 0.0};
-        // return u;
-
+    void getFollowerCmd() {
         // 刚性变量
         Eigen::Vector2d p_20 = {robots_[2].x - robots_[0].x, robots_[2].y - robots_[0].y};
         Eigen::Vector2d p_21 = {robots_[2].x - robots_[1].x, robots_[2].y - robots_[1].y};
@@ -248,12 +325,11 @@ private:
 
         // control law
         double k_f = k_follower_;
-        if(t < leader_start_time_) {
-            k_f = 0.3;
+        if( t_global_ < leader_start_time_ + 2.0 ) {
+            k_f = 0.5;
         }
-        u = -k_f * r2 - beta_ * sign(r2);
-
-        return u; // 全局系下的速度
+        u_2_ = -k_f * r2 - beta_soft_ * tanhVec(r2);
+        return;
     }
 
 
