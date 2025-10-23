@@ -24,7 +24,7 @@ struct Robot {
 
     // 控制参数
     double max_v = 0.5;  
-    double max_w = 0.6;     
+    double max_w = 0.8;     
 };
 
 class RigidControllerNode {
@@ -41,8 +41,8 @@ public:
         robots_[1].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_2/robot_pose_ekf/odom_combined", 10,
             boost::bind(&RigidControllerNode::poseCallback, this, _1, 1));
         robots_[1].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_2/cmd_vel", 10);
-        robots_[1].init_x = -1.0;
-        robots_[1].init_y = -0.5;
+        robots_[1].init_x = -1.5;
+        robots_[1].init_y = -0.8;
         robots_[1].init_yaw = 0.0;
 
         // follower
@@ -50,8 +50,8 @@ public:
         robots_[2].pose_sub = nh_.subscribe<geometry_msgs::PoseWithCovarianceStamped>("/robot_3/robot_pose_ekf/odom_combined", 10,
             boost::bind(&RigidControllerNode::poseCallback, this, _1, 2));
         robots_[2].cmd_pub  = nh_.advertise<geometry_msgs::Twist>("/robot_3/cmd_vel", 10);
-        robots_[2].init_x = -1.0;
-        robots_[2].init_y = 1.0;
+        robots_[2].init_x = -1.3;
+        robots_[2].init_y = 0.9;
         robots_[2].init_yaw = 0.0;
 
         // 定时器：统一 control loop
@@ -74,21 +74,24 @@ private:
     float akm_offset = 0.2 ;
 
     // coleader参数
-    double k_coleader_ = 0.6;
-    double alpha_ = 0.6;  // 定向增益 0.6
+    double k_coleader_ = 0.5; // coleader rigid term
+    double alpha_ = 0.0;  // 定向增益
 
     // follower参数
-    double k_follower_ = 3.0;
-    // double beta_ = 0.0;   // SMC
-    double beta_soft_ = 0.37; // 0.37
-    double tanh_k_ = 4.0;
+    double k_follower_ = 2.0;
+
+    // 以下两组参数只能开一个
+    // double beta_ = 0.0;  // sign term
+    double beta_soft_ = 0.22 ; // tanh(kx) term 0.2x 0.07y
+    double tanh_k_ = 0.0; // tanh kx系数
 
     // leader 运动参数 vy=-Asin(wt)
-    double A_ = 0.06;     // 振幅
+    double A_ = 0.08;     // 振幅
     double w_ = 0.5;     // omega
     double v_straight_ = 0.2; // vx
-    double init_time_ = 5.0;
-    double leader_start_time_ = 5.0;
+
+    double init_time_ = 8.0;
+    double leader_start_time_ = 8.0;
     double go_straight_time_ = 2.0;
 
     // 定向向量
@@ -97,8 +100,8 @@ private:
 
     // 队形
     double d_01_ = 0.7;
-    double d_02_ = 0.7;
-    double d_12_ = 0.7;
+    double d_02_ = 0.8;
+    double d_12_ = 1.0;
 
     // 控制输入
     Eigen::Vector2d u_0_, u_1_, u_2_;
@@ -206,7 +209,7 @@ private:
             t_global_, e_01, e_02, e_12, o_err, o_err_deg);
 
         // 检查停止信号
-        if (stop_signal_ && !log_dumped_ ) {
+        if (stop_signal_ && !log_dumped_ && t_global_ > 40.0) {
             dump_log("/home/wheeltec/zyl_ws/fmc.log");
             log_dumped_ = true;
         }
@@ -231,7 +234,7 @@ private:
     // 该函数返回leader的期望速度vd，以及更新po dpo
     void getLeaderCmd() {
         // stop signal
-        if ( robots_[0].x > 4.0 ) {
+        if ( robots_[0].x > 3.5 ) {
             u_0_ = {0.0, 0.0};
             dp_o_ = {0.0, 0.0};
             stop_signal_ = true;
@@ -292,15 +295,15 @@ private:
         u_1_ = -(k_coleader_ - eta) * (r1 - alpha_ * p_o_bar) + u_0_;
     }
 
-    // Eigen::Vector2d sign(const Eigen::Vector2d& v) {
-    //     Eigen::Vector2d res;
-    //     for (int i = 0; i < 2; ++i) {
-    //         if (v[i] > 0) res[i] = 1.0;
-    //         else if (v[i] < 0) res[i] = -1.0;
-    //         else res[i] = 0.0;
-    //     }
-    //     return res;
-    // }
+    Eigen::Vector2d sign(const Eigen::Vector2d& v) {
+        Eigen::Vector2d res;
+        for (int i = 0; i < 2; ++i) {
+            if (v[i] > 0) res[i] = 1.0;
+            else if (v[i] < 0) res[i] = -1.0;
+            else res[i] = 0.0;
+        }
+        return res;
+    }
 
     Eigen::Vector2d tanhVec(const Eigen::Vector2d& v) {
         Eigen::Vector2d res;
@@ -325,10 +328,10 @@ private:
 
         // control law
         double k_f = k_follower_;
-        if( t_global_ < leader_start_time_ + 2.0 ) {
-            k_f = 0.5;
-        }
-        u_2_ = -k_f * r2 - beta_soft_ * tanhVec(r2);
+        // if( t_global_ < leader_start_time_ + 2.0 ) {
+        //     k_f = 0.8;
+        // }
+        u_2_ = -k_f * r2 - beta_soft_ * tanhVec(r2) ; // - beta_ * sign(r2);
         return;
     }
 
@@ -344,8 +347,8 @@ private:
 
         // 限幅
         if (vx_local > robots_[index].max_v) vx_local = robots_[index].max_v;
-        // if (vx_local < -robots_[index].max_v) vx_local = -robots_[index].max_v;
-        if (vx_local < 0.0) vx_local = 0.0; // no reverse
+        if (vx_local < -robots_[index].max_v) vx_local = -robots_[index].max_v;
+        // if (vx_local < 0.0) vx_local = 0.0; // no reverse
 
         if (omega > robots_[index].max_w) omega = robots_[index].max_w;
         if (omega < -robots_[index].max_w) omega = -robots_[index].max_w;

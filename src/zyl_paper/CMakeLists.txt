@@ -28,3 +28,9 @@ target_link_libraries(rp_controller ${catkin_LIBRARIES})
 
 add_executable(rigid_controller src/rigid_controller.cc)
 target_link_libraries(rigid_controller ${catkin_LIBRARIES})
+
+add_executable(odom_test src/odom_test.cc)
+target_link_libraries(odom_test ${catkin_LIBRARIES})
+
+add_executable(pose_ekf_test src/pose_ekf_test.cc)
+target_link_libraries(pose_ekf_test ${catkin_LIBRARIES})

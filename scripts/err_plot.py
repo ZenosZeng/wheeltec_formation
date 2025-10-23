@@ -4,13 +4,14 @@ import argparse
 import os
 
 plt.rcParams['font.sans-serif'] = ['Times New Roman']
+# plt.style.use('ggplot')
 
 def main(csv_path):
     # 读取 CSV 数据
     df = pd.read_csv(csv_path)
 
     # 删除前五秒的row
-    df = df[df["t"] > 5]
+    df = df[df["t"] > 8]
 
     time = df['t']
     
@@ -67,7 +68,7 @@ def main(csv_path):
 
 
     # 图3： 画稳态误差，画图用原始数据，计算均值和标准差时取绝对值（所有数据合在一起）
-    mask = (time >= 12) & (time <= 25)
+    mask = (time >= 15) & (time <= 30)
     plt.figure(figsize=(4,3))
 
     mean_list = []
@@ -90,6 +91,35 @@ def main(csv_path):
     plt.tick_params(axis='both', which='major', direction='in')
 
     segment_plot_path = os.path.join(output_dir, 'distance_errors_steady.png')
+    plt.savefig(segment_plot_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+    print(f"  {segment_plot_path}")
+
+
+    # 图4： 画最终误差
+    mask = (time >= 30) & (time <= 40)
+    plt.figure(figsize=(4,3))
+
+    mean_list = []
+    std_list = []
+    for col in dij_columns:
+        segment = df.loc[mask, col]
+        abs_segment = segment.abs()
+        mean = abs_segment.mean()
+        std = segment.std()
+        mean_list.append(mean)
+        std_list.append(std)
+        plt.plot(time[mask], segment, label=col, linewidth=0.7, alpha=0.7)
+    mean_val = sum(mean_list) / len(mean_list)
+    std_val = sum(std_list) / len(std_list)
+
+    plt.xlabel("Time (s)")
+    plt.ylabel("Distance Error (m)")
+    plt.title(f"Mean: {mean_val:.3f} / Std: {std_val:.3e}", fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.tick_params(axis='both', which='major', direction='in')
+
+    segment_plot_path = os.path.join(output_dir, 'distance_errors_final.png')
     plt.savefig(segment_plot_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
     plt.close()
     print(f"  {segment_plot_path}")
