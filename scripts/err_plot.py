@@ -22,8 +22,8 @@ def main(csv_path):
 
     # 获取输出路径
     output_dir = os.path.dirname(csv_path)
-    distance_plot_path = os.path.join(output_dir, 'distance_errors.png')
-    orientation_plot_path = os.path.join(output_dir, 'orientation_error.png')
+    distance_plot_path = os.path.join(output_dir, 'distance_errors.pdf')
+    orientation_plot_path = os.path.join(output_dir, 'orientation_error.pdf')
     orientation_deg_plot_path = os.path.join(output_dir, 'orientation_error_deg.png')
 
     # 图1：距离误差
@@ -138,7 +138,5 @@ def main(csv_path):
     # print(f"  {freq_plot_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot formation control errors from CSV.")
-    parser.add_argument("csv_path", help="Path to the CSV file containing error data.")
-    args = parser.parse_args()
-    main(args.csv_path)
+    csv_path = "logs_exp/1023/thk_5/fmc.log"
+    main(csv_path)

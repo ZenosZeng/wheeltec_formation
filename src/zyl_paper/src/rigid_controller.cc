@@ -62,7 +62,7 @@ public:
     }
 
 private:
-    ros::NodeHandle nh_;
+    ros::NodeHandle nh_; 
     ros::Timer timer_;
 
     // 用于记录log csv
