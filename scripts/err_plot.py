@@ -3,8 +3,10 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 
-plt.rcParams['font.sans-serif'] = ['Times New Roman']
-# plt.style.use('ggplot')
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['simsun']   # 使用宋体
+plt.rcParams['axes.unicode_minus'] = False     # 解决负号显示为方块的问题
+plt.rcParams['text.usetex'] = False
 
 def main(csv_path):
     # 读取 CSV 数据
@@ -24,14 +26,14 @@ def main(csv_path):
     output_dir = os.path.dirname(csv_path)
     distance_plot_path = os.path.join(output_dir, 'distance_errors.pdf')
     orientation_plot_path = os.path.join(output_dir, 'orientation_error.pdf')
-    orientation_deg_plot_path = os.path.join(output_dir, 'orientation_error_deg.png')
+    orientation_deg_plot_path = os.path.join(output_dir, 'orientation_error_deg.pdf')
 
     # 图1：距离误差
     plt.figure(figsize=(4,3))
     for col in dij_columns:
         plt.plot(time, df[col], label=col, linewidth=0.7, alpha=0.7)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Distance Error (m)")
+    plt.xlabel("时间（s)")
+    plt.ylabel("距离误差（m）")
 
     plt.grid(True, linestyle='--', linewidth=0.7, alpha=0.7)
     plt.tick_params(axis='both', which='major', direction='in')
@@ -43,8 +45,8 @@ def main(csv_path):
     # 图2：方向误差(norm+deg)
     plt.figure(figsize=(4,3))
     plt.plot(time, o_error, color='blue', label='o_error', linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Orientation Error")
+    plt.xlabel("时间（s)")
+    plt.ylabel("方向误差")
 
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tick_params(axis='both', which='major', direction='in')
@@ -55,8 +57,8 @@ def main(csv_path):
     # next
     plt.figure(figsize=(4,3))
     plt.plot(time, o_error_deg, color='blue', label='o_error', linewidth=0.8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Orientation Error (deg)")
+    plt.xlabel("时间（s)")
+    plt.ylabel("方向误差（度）")
 
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tick_params(axis='both', which='major', direction='in')
@@ -84,8 +86,8 @@ def main(csv_path):
     mean_val = sum(mean_list) / len(mean_list)
     std_val = sum(std_list) / len(std_list)
 
-    plt.xlabel("Time (s)")
-    plt.ylabel("Distance Error (m)")
+    plt.xlabel("时间（s)")
+    plt.ylabel("稳态距离误差（m）")
     plt.title(f"Mean: {mean_val:.3f} / Std: {std_val:.3e}", fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tick_params(axis='both', which='major', direction='in')
@@ -113,8 +115,8 @@ def main(csv_path):
     mean_val = sum(mean_list) / len(mean_list)
     std_val = sum(std_list) / len(std_list)
 
-    plt.xlabel("Time (s)")
-    plt.ylabel("Distance Error (m)")
+    plt.xlabel("时间（s)")
+    plt.ylabel("静态距离误差（m）")
     plt.title(f"Mean: {mean_val:.3f} / Std: {std_val:.3e}", fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tick_params(axis='both', which='major', direction='in')
@@ -138,5 +140,5 @@ def main(csv_path):
     # print(f"  {freq_plot_path}")
 
 if __name__ == "__main__":
-    csv_path = "logs_exp/1023/thk_5/fmc.log"
+    csv_path = "logs_exp/1023/alpha0beta0/fmc.log"
     main(csv_path)
